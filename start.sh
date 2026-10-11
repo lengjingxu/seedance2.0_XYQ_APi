@@ -12,6 +12,24 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# 读取项目根目录的 .env（若存在）。只做最简单的 KEY=VALUE 赋值，不执行文件内容；
+# 已存在的同名环境变量优先，不会被 .env 覆盖。
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|\#*) continue ;;
+    esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    case "$key" in
+      ''|*[!A-Za-z0-9_]*) continue ;;
+    esac
+    if [ -z "${!key+x}" ]; then
+      export "$key=$value"
+    fi
+  done < "$SCRIPT_DIR/.env"
+fi
+
 PYTHON="${PYTHON:-$SCRIPT_DIR/.venv/bin/python}"
 if [ ! -x "$PYTHON" ]; then
   echo "错误：未找到虚拟环境 Python -> $PYTHON"
