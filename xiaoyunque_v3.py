@@ -643,6 +643,50 @@ async def submit_task(page: Page, prompt: str, images: list, duration: int,
 
 # ==================== 多策略视频 URL 提取 ====================
 
+# 任务产物（artifact / message）里存放视频的结构键。
+# 形如 entry['artifact']['content'][i]['data']，而 data 本身还是一段 JSON 字符串。
+_VIDEO_CONTAINER_KEYS = ('content', 'artifact', 'message', 'data', 'entry_list', 'run_list')
+
+
+def _find_video_url(obj, depth: int = 0) -> Optional[str]:
+    """在（可能层层嵌套 JSON 字符串的）任务产物里查找视频地址。
+
+    小云雀返回的视频直链不含 .mp4 后缀（例如
+    https://v11-xyq-video.jianying.com/<hash>/<hash>/video/...?<签名>），
+    因此这里只认显式的 video 字段（download_url / url / play_url / preview_url），
+    不做扩展名猜测，也不接受其它任意 http 链接。
+    """
+    if obj is None or depth > 12:
+        return None
+    if isinstance(obj, str):
+        s = obj.strip()
+        if s[:1] in ('{', '['):
+            try:
+                return _find_video_url(json.loads(s), depth + 1)
+            except json.JSONDecodeError:
+                return None
+        return None
+    if isinstance(obj, list):
+        for item in obj:
+            found = _find_video_url(item, depth + 1)
+            if found:
+                return found
+        return None
+    if isinstance(obj, dict):
+        video = obj.get('video')
+        if isinstance(video, dict):
+            for key in ('download_url', 'url', 'play_url', 'preview_url'):
+                value = video.get(key)
+                if isinstance(value, str) and value.startswith('http'):
+                    return _html.unescape(value)
+        for key in _VIDEO_CONTAINER_KEYS:
+            if key in obj:
+                found = _find_video_url(obj[key], depth + 1)
+                if found:
+                    return found
+    return None
+
+
 def extract_video_url(data: dict) -> Optional[str]:
     """多策略降级提取视频 URL"""
     if not data:
@@ -671,8 +715,11 @@ def extract_video_url(data: dict) -> Optional[str]:
         urls = re.findall(pattern, json_str)
         if urls:
             return _html.unescape(urls[0])
-    
-    return None
+
+    # 策略 3: 任务产物内嵌 JSON 中的显式 video 字段。
+    # 上面的正则要求 URL 含 .mp4，而小云雀的真实直链并不含该后缀，
+    # 所以完成任务（state=3）时也必须走这一条，否则会一直取不到地址。
+    return _find_video_url(data)
 
 # ==================== 固定间隔轮询 ====================
 
